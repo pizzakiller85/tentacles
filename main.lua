@@ -27,6 +27,17 @@ local function randomInCircle(radius)
   return math.cos(angle) * r, math.sin(angle) * r
 end
 
+local function moveTowards(x, y, tx, ty, maxStep)
+  local dx, dy = tx - x, ty - y
+  local dist = math.sqrt(dx * dx + dy * dy)
+  if dist <= maxStep or dist == 0 then
+    return tx, ty
+  end
+  local nx = x + dx / dist * maxStep
+  local ny = y + dy / dist * maxStep
+  return nx, ny
+end
+
 -- Robust atan2 for Lua variants
 local function atan2(y, x)
   if x > 0 then
@@ -60,7 +71,7 @@ function Monster.new(x, y, radius, tentacleCount)
   self.color = { 0.16, 0.72, 0.66 }
   self.tentacleBaseJitter = 0 -- what does this do?
 
-  local totalTentacles = 8 
+  local totalTentacles = 32
   for i = 1, totalTentacles do
     local angle = (i - 1) / totalTentacles * 2 * math.pi
     local baseRadius = radius - 2
@@ -138,6 +149,13 @@ function Tentacle.new(baseX, baseY, anchorAngle, segmentCount, segmentLength)
   self.grabRadius = 10
   self.searchCooldown = love.math.random() * 0.6
 
+  -- Smoothed IK target and per-state speeds (pixels/second)
+  self.ikTargetX = baseX
+  self.ikTargetY = baseY
+  self.reachSpeed = 280
+  self.retractSpeed = 200
+  self.idleSpeed = 100
+
   return self
 end
 
@@ -195,8 +213,17 @@ function Tentacle:update(dt, particles, monster)
     targetY = self.baseY + math.sin(self.anchorAngle + math.cos(love.timer.getTime() * 0.8) * 0.4) * idleR
   end
 
+  -- Smooth the IK target toward desired target based on state speeds
+  local speed = self.idleSpeed
+  if self.grabbedParticle then
+    speed = self.retractSpeed
+  elseif self.targetParticle and not self.targetParticle._removed then
+    speed = self.reachSpeed
+  end
+  self.ikTargetX, self.ikTargetY = moveTowards(self.ikTargetX, self.ikTargetY, targetX, targetY, speed * dt)
+
   -- IK: backward pass (follow target) then forward pass (re-anchor base)
-  local tx, ty = targetX, targetY
+  local tx, ty = self.ikTargetX, self.ikTargetY
   for i = #self.segments, 1, -1 do
     segmentFollow(self.segments[i], tx, ty)
     tx, ty = self.segments[i].ax, self.segments[i].ay
@@ -290,7 +317,7 @@ local world = {
   monster = nil,
   particles = {},
   particleRespawnTimer = 0,
-  initialParticles = 60,
+  initialParticles = 800,
 }
 
 function love.load()
@@ -308,7 +335,7 @@ function love.load()
 end
 
 function love.update(dt)
-  love.timer.sleep(0.5)  
+  --love.timer.sleep(0.5)  
   -- Gentle drift for particles
   for i = #world.particles, 1, -1 do
     local p = world.particles[i]
