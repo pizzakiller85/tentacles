@@ -1,5 +1,5 @@
 -- Minimal LÖVE 2D simulation: a monster with tentacles that grab particles and eat them
-
+-- what does this do?
 local function clamp(value, minValue, maxValue)
   if value < minValue then return minValue end
   if value > maxValue then return maxValue end
@@ -58,16 +58,16 @@ function Monster.new(x, y, radius, tentacleCount)
   self.score = 0
   self.tentacles = {}
   self.color = { 0.16, 0.72, 0.66 }
-  self.tentacleBaseJitter = 0
+  self.tentacleBaseJitter = 0 -- what does this do?
 
-  local totalTentacles = tentacleCount or 8
+  local totalTentacles = 8 
   for i = 1, totalTentacles do
     local angle = (i - 1) / totalTentacles * 2 * math.pi
     local baseRadius = radius - 2
     local baseX = x + math.cos(angle) * baseRadius
     local baseY = y + math.sin(angle) * baseRadius
-    local segments = 16
-    local segmentLength = 16
+    local segments = 32
+    local segmentLength = 8
     local t = Tentacle.new(baseX, baseY, angle, segments, segmentLength)
     self.tentacles[i] = t
   end
@@ -290,6 +290,7 @@ local world = {
   monster = nil,
   particles = {},
   particleRespawnTimer = 0,
+  initialParticles = 60,
 }
 
 function love.load()
@@ -300,12 +301,14 @@ function love.load()
   local cx, cy = world.width * 0.5, world.height * 0.55
   world.monster = Monster.new(cx, cy, 38, 8)
 
-  for _ = 1, 60 do
-    table.insert(world.particles, spawnParticleRing(cx, cy, 160, 240))
+  for _ = 1, world.initialParticles do
+    --table.insert(world.particles, spawnParticleRing(cx, cy, 160, 240))
+    table.insert(world.particles, spawnParticleRing(cx, cy, 500, 500))
   end
 end
 
 function love.update(dt)
+  love.timer.sleep(0.5)  
   -- Gentle drift for particles
   for i = #world.particles, 1, -1 do
     local p = world.particles[i]
@@ -330,7 +333,7 @@ function love.update(dt)
   world.particleRespawnTimer = world.particleRespawnTimer - dt
   if world.particleRespawnTimer <= 0 then
     world.particleRespawnTimer = 0.4
-    table.insert(world.particles, spawnParticleRing(world.monster.x, world.monster.y, 180, 260))
+    table.insert(world.particles, spawnParticleRing(world.monster.x, world.monster.y, 200, 200))
   end
 
   -- Update monster and tentacles
