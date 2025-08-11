@@ -61,7 +61,7 @@ local Tentacle
 local Monster = {}
 Monster.__index = Monster
 
-function Monster.new(x, y, radius, tentacleCount)
+function Monster.new(x, y, radius, tentacleCount, segmentCount, segmentLength)
   local self = setmetatable({}, Monster)
   self.x = x
   self.y = y
@@ -71,17 +71,7 @@ function Monster.new(x, y, radius, tentacleCount)
   self.color = { 0.16, 0.72, 0.66 }
   self.tentacleBaseJitter = 0 -- what does this do?
 
-  local totalTentacles = 32
-  for i = 1, totalTentacles do
-    local angle = (i - 1) / totalTentacles * 2 * math.pi
-    local baseRadius = radius - 2
-    local baseX = x + math.cos(angle) * baseRadius
-    local baseY = y + math.sin(angle) * baseRadius
-    local segments = 32
-    local segmentLength = 8
-    local t = Tentacle.new(baseX, baseY, angle, segments, segmentLength)
-    self.tentacles[i] = t
-  end
+  self:rebuildTentacles(tentacleCount or 8, segmentCount or 16, segmentLength or 16)
 
   return self
 end
@@ -113,6 +103,19 @@ function Monster:draw()
   -- Score text
   love.graphics.setColor(1, 1, 1, 0.9)
   love.graphics.print("Eaten: " .. tostring(self.score), 12, 12)
+end
+
+function Monster:rebuildTentacles(tentacleCount, segmentCount, segmentLength)
+  self.tentacles = {}
+  local totalTentacles = math.max(1, math.floor(tentacleCount))
+  local baseRadius = self.radius - 2
+  for i = 1, totalTentacles do
+    local angle = (i - 1) / totalTentacles * 2 * math.pi
+    local baseX = self.x + math.cos(angle) * baseRadius
+    local baseY = self.y + math.sin(angle) * baseRadius
+    local t = Tentacle.new(baseX, baseY, angle, math.max(2, math.floor(segmentCount)), math.max(2, math.floor(segmentLength)))
+    self.tentacles[i] = t
+  end
 end
 
 -- Tentacle implementation using a simple 2-pass IK (follow + re-anchor base)
@@ -316,8 +319,19 @@ local world = {
   height = 1080,
   monster = nil,
   particles = {},
-  particleRespawnTimer = 0,
+  particleRespawnTimer = 0, -- legacy, not used after slider setup
   initialParticles = 800,
+  spawnAccumulator = 0,
+  settings = {
+    tentacleCount = 32,
+    tentacleSegmentCount = 32,
+    tentacleSegmentLength = 8,
+    particlesPerSecond = 5,
+  },
+  ui = {
+    sliders = {},
+    dragging = nil,
+  },
 }
 
 function love.load()
@@ -326,7 +340,13 @@ function love.load()
   love.graphics.setBackgroundColor(0.07, 0.09, 0.10)
 
   local cx, cy = world.width * 0.5, world.height * 0.55
-  world.monster = Monster.new(cx, cy, 38, 8)
+  world.monster = Monster.new(
+    cx, cy,
+    38,
+    world.settings.tentacleCount,
+    world.settings.tentacleSegmentCount,
+    world.settings.tentacleSegmentLength
+  )
 
   for _ = 1, world.initialParticles do
     --table.insert(world.particles, spawnParticleRing(cx, cy, 160, 240))
@@ -336,6 +356,7 @@ end
 
 function love.update(dt)
   --love.timer.sleep(0.5)  
+  updateUI(dt)
   -- Gentle drift for particles
   for i = #world.particles, 1, -1 do
     local p = world.particles[i]
@@ -356,10 +377,10 @@ function love.update(dt)
     end
   end
 
-  -- Respawn new particles over time
-  world.particleRespawnTimer = world.particleRespawnTimer - dt
-  if world.particleRespawnTimer <= 0 then
-    world.particleRespawnTimer = 0.4
+  -- Respawn new particles over time using particlesPerSecond
+  world.spawnAccumulator = world.spawnAccumulator + dt * (world.settings.particlesPerSecond or 0)
+  while world.spawnAccumulator >= 1 do
+    world.spawnAccumulator = world.spawnAccumulator - 1
     table.insert(world.particles, spawnParticleRing(world.monster.x, world.monster.y, 200, 200))
   end
 
@@ -410,6 +431,96 @@ function love.draw()
   -- Hint
   love.graphics.setColor(1, 1, 1, 0.7)
   love.graphics.print("Hold Left Mouse Button to gently move the monster", 12, world.height - 24)
+
+  drawUI()
+end
+
+-- Simple UI sliders
+local function sliderToValue(slider, mx)
+  local t = clamp((mx - slider.x) / slider.w, 0, 1)
+  local value = slider.min + t * (slider.max - slider.min)
+  if slider.isInteger then value = math.floor(value + 0.5) end
+  return value
+end
+
+local function makeSlider(x, y, w, label, min, max, value, isInteger)
+  return { x = x, y = y, w = w, h = 20, label = label, min = min, max = max, value = value, isInteger = isInteger }
+end
+
+local function formatValue(slider)
+  if slider.isInteger then return tostring(math.floor(slider.value + 0.5)) end
+  return string.format("%.1f", slider.value)
+end
+
+function initUI()
+  local x, y, w, pad = 16, 16, 260, 10
+  world.ui.sliders = {
+    makeSlider(x, y + 0 * (20 + pad), w, "tentacleCount", 4, 64, world.settings.tentacleCount, true),
+    makeSlider(x, y + 1 * (20 + pad), w, "tentacleSegmentCount", 4, 64, world.settings.tentacleSegmentCount, true),
+    makeSlider(x, y + 2 * (20 + pad), w, "tentacleSegmentLength", 4, 24, world.settings.tentacleSegmentLength, true),
+    makeSlider(x, y + 3 * (20 + pad), w, "particlesPerSecond", 0, 30, world.settings.particlesPerSecond, false),
+  }
+end
+
+function drawUI()
+  if #world.ui.sliders == 0 then initUI() end
+  love.graphics.setColor(0, 0, 0, 0.35)
+  love.graphics.rectangle('fill', 8, 8, 300, 4 * 30 + 20, 6, 6)
+  for _, s in ipairs(world.ui.sliders) do
+    -- bar
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.rectangle('line', s.x, s.y, s.w, s.h, 4, 4)
+    love.graphics.setColor(1, 1, 1, 0.15)
+    love.graphics.rectangle('fill', s.x, s.y, s.w, s.h, 4, 4)
+    -- handle
+    local t = (s.value - s.min) / (s.max - s.min)
+    local hx = s.x + t * s.w
+    love.graphics.setColor(0.98, 0.83, 0.35)
+    love.graphics.circle('fill', hx, s.y + s.h * 0.5, 7)
+    -- label
+    love.graphics.setColor(1, 1, 1, 0.9)
+    love.graphics.print(s.label .. ": " .. formatValue(s), s.x + s.w + 10, s.y - 2)
+  end
+end
+
+local function applySettings()
+  local s = world.settings
+  world.monster:rebuildTentacles(s.tentacleCount, s.tentacleSegmentCount, s.tentacleSegmentLength)
+end
+
+function updateUI(dt)
+  if #world.ui.sliders == 0 then initUI() end
+  local mx, my = love.mouse.getPosition()
+  local isDown = love.mouse.isDown(1)
+  local changed = false
+
+  if isDown then
+    -- begin or continue drag
+    if world.ui.dragging == nil then
+      for idx, s in ipairs(world.ui.sliders) do
+        if mx >= s.x and mx <= s.x + s.w and my >= s.y and my <= s.y + s.h then
+          world.ui.dragging = idx
+          break
+        end
+      end
+    end
+    if world.ui.dragging ~= nil then
+      local s = world.ui.sliders[world.ui.dragging]
+      local old = s.value
+      s.value = sliderToValue(s, mx)
+      if s.value ~= old then changed = true end
+    end
+  else
+    world.ui.dragging = nil
+  end
+
+  if changed then
+    -- sync to settings
+    for _, s in ipairs(world.ui.sliders) do
+      world.settings[s.label] = s.isInteger and math.floor(s.value + 0.5) or s.value
+    end
+    applySettings()
+  end
 end
 
 
