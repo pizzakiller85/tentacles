@@ -152,6 +152,9 @@ function Tentacle.new(baseX, baseY, anchorAngle, segmentCount, segmentLength)
   self.grabRadius = 10
   self.searchCooldown = love.math.random() * 0.6
 
+  -- Time spent in 'reaching' state
+  self.reachingTime = 0
+
   -- Smoothed IK target and per-state speeds (pixels/second)
   self.ikTargetX = baseX
   self.ikTargetY = baseY
@@ -246,6 +249,21 @@ function Tentacle:update(dt, particles, monster)
 
   -- Interactions
   local tipX, tipY = self:tipPosition()
+
+  -- Time-based abandon: if reaching too long, reset
+  if self.targetParticle and not self.targetParticle._removed and self.state == 'reaching' then
+    self.reachingTime = self.reachingTime + dt
+    if self.reachingTime > 1.5 then -- seconds
+      self.targetParticle.claimedBy = nil
+      self.targetParticle = nil
+      self.state = 'idle'
+      self.reachingTime = 0
+      return
+    end
+  else
+    self.reachingTime = 0
+  end
+
   if self.grabbedParticle then
     -- Attach particle to tip
     self.grabbedParticle.x = tipX
@@ -263,6 +281,7 @@ function Tentacle:update(dt, particles, monster)
       self.grabbedParticle = self.targetParticle
       self.targetParticle = nil
       self.state = 'retracting'
+      self.reachingTime = 0
     end
   end
 end
@@ -286,9 +305,11 @@ function Tentacle:findTarget(particles)
   if nearest then
     self.targetParticle = nearest
     self.state = 'reaching'
+    self.reachingTime = 0
     nearest.claimedBy = self
   else
     self.state = 'idle'
+    self.reachingTime = 0
   end
 end
 
@@ -327,6 +348,7 @@ local world = {
     tentacleSegmentCount = 32,
     tentacleSegmentLength = 8,
     particlesPerSecond = 5,
+    simulationSpeed = 1.0,
   },
   ui = {
     sliders = {},
@@ -355,8 +377,9 @@ function love.load()
 end
 
 function love.update(dt)
-  --love.timer.sleep(0.5)  
   updateUI(dt)
+  local speed = world.settings.simulationSpeed or 1.0
+  dt = dt * speed
   -- Gentle drift for particles
   for i = #world.particles, 1, -1 do
     local p = world.particles[i]
@@ -391,9 +414,9 @@ function love.update(dt)
   if love.mouse.isDown(1) then
     local mx, my = love.mouse.getPosition()
     local dirx, diry = normalize(mx - world.monster.x, my - world.monster.y)
-    local speed = 60
-    world.monster.x = world.monster.x + dirx * speed * dt
-    world.monster.y = world.monster.y + diry * speed * dt
+    local moveSpeed = 60 * speed
+    world.monster.x = world.monster.x + dirx * moveSpeed * dt / speed -- only scale by speed once
+    world.monster.y = world.monster.y + diry * moveSpeed * dt / speed
   end
 end
 
@@ -407,6 +430,12 @@ local function drawTentacle(t)
     prevx, prevy = s.bx, s.by
   end
   local tipx, tipy = t.segments[#t.segments].bx, t.segments[#t.segments].by
+  -- Draw line to target if reaching
+  if t.targetParticle and not t.targetParticle._removed and t.state == 'reaching' then
+    love.graphics.setColor(1, 0.2, 0.2, 0.7)
+    love.graphics.setLineWidth(2)
+    love.graphics.line(tipx, tipy, t.targetParticle.x, t.targetParticle.y)
+  end
   love.graphics.setColor(t.tipColor)
   love.graphics.circle('fill', tipx, tipy, 4)
 end
@@ -459,6 +488,7 @@ function initUI()
     makeSlider(x, y + 1 * (20 + pad), w, "tentacleSegmentCount", 4, 64, world.settings.tentacleSegmentCount, true),
     makeSlider(x, y + 2 * (20 + pad), w, "tentacleSegmentLength", 4, 24, world.settings.tentacleSegmentLength, true),
     makeSlider(x, y + 3 * (20 + pad), w, "particlesPerSecond", 0, 30, world.settings.particlesPerSecond, false),
+    makeSlider(x, y + 4 * (20 + pad), w, "simulationSpeed", 0.05, 5.0, world.settings.simulationSpeed or 1.0, false),
   }
 end
 
