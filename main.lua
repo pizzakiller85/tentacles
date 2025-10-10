@@ -66,10 +66,12 @@ function Monster.new(x, y, radius, tentacleCount, segmentCount, segmentLength)
   self.x = x
   self.y = y
   self.radius = radius
+  self.initialRadius = radius -- Store initial size for reference
   self.score = 0
   self.tentacles = {}
   self.color = { 0.16, 0.72, 0.66 }
   self.tentacleBaseJitter = 0 -- what does this do?
+  self.growthRate = 0.15 -- How much the radius grows per particle eaten
 
   self:rebuildTentacles(tentacleCount or 8, segmentCount or 16, segmentLength or 16)
 
@@ -90,6 +92,10 @@ function Monster:update(dt, particles)
     t.anchorAngle = angle
     t:update(dt, particles, self)
   end
+end
+
+function Monster:grow()
+  self.radius = self.radius + self.growthRate
 end
 
 function Monster:draw()
@@ -275,6 +281,9 @@ function Tentacle:update(dt, particles, monster)
       self.grabbedParticle = nil
       self.state = 'idle'
       monster.score = monster.score + 1
+      monster:grow() -- Monster grows when eating
+      -- Immediately look for new target after eating
+      self:findTarget(particles)
     end
   elseif self.targetParticle and not self.targetParticle._removed then
     if distance(tipX, tipY, self.targetParticle.x, self.targetParticle.y) <= self.grabRadius then
@@ -364,7 +373,7 @@ function love.load()
   local cx, cy = world.width * 0.5, world.height * 0.55
   world.monster = Monster.new(
     cx, cy,
-    38,
+    40,
     world.settings.tentacleCount,
     world.settings.tentacleSegmentCount,
     world.settings.tentacleSegmentLength
@@ -421,6 +430,15 @@ function love.update(dt)
 end
 
 local function drawTentacle(t)
+  -- Draw search radius
+  love.graphics.setColor(0.2, 0.7, 1.0, 0.13)
+  love.graphics.setLineWidth(1)
+  love.graphics.circle('line', t.baseX, t.baseY, t.maxReach * 0.95)
+
+  -- Draw red dot at base
+  love.graphics.setColor(1, 0, 0, 0.9)
+  love.graphics.circle('fill', t.baseX, t.baseY, 5)
+
   love.graphics.setLineWidth(3)
   love.graphics.setColor(t.color)
   local prevx, prevy = t.segments[1].ax, t.segments[1].ay
@@ -450,8 +468,8 @@ function love.draw()
   end
 
   -- Tentacles
-  for _, t in ipairs(world.monster.tentacles) do
-    drawTentacle(t)
+  for _, tentacle in ipairs(world.monster.tentacles) do
+    drawTentacle(tentacle)
   end
 
   -- Monster body last
