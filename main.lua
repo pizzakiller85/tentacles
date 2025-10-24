@@ -98,7 +98,7 @@ function Monster:grow()
   self.radius = self.radius + self.growthRate
 end
 
-function Monster:draw()
+function Monster:draw(particleCount)
   love.graphics.setColor(self.color)
   love.graphics.circle('fill', self.x, self.y, self.radius)
 
@@ -109,6 +109,11 @@ function Monster:draw()
   -- Score text
   love.graphics.setColor(1, 1, 1, 0.9)
   love.graphics.print("Eaten: " .. tostring(self.score), 12, 12)
+
+  -- Particle count
+  if particleCount then
+    love.graphics.print("Particles: " .. tostring(particleCount), 12, 32)
+  end
 end
 
 function Monster:rebuildTentacles(tentacleCount, segmentCount, segmentLength)
@@ -323,16 +328,27 @@ function Tentacle:findTarget(particles)
 end
 
 -- Particles
-local function newParticle(x, y)
+local function newParticle(x, y, isChild, childCooldown)
+  local spawnCooldown = 0
+  local color = { 0.98, 0.83, 0.35 } -- yellow for adults
+
+  if isChild then
+    spawnCooldown = childCooldown or 20.0
+    color = { 0.3, 0.9, 0.3 } -- green for children
+  end
+
   return {
     x = x,
     y = y,
     vx = 0,
     vy = 0,
     r = 3 + love.math.random() * 2,
-    color = { 0.98, 0.83, 0.35 },
+    color = color,
+    baseColor = color,
     _removed = false,
     claimedBy = nil,
+    spawnCooldown = spawnCooldown,
+    isChild = isChild or false,
   }
 end
 
@@ -350,7 +366,7 @@ local world = {
   monster = nil,
   particles = {},
   particleRespawnTimer = 0, -- legacy, not used after slider setup
-  initialParticles = 800,
+  initialParticles = 100,
   spawnAccumulator = 0,
   settings = {
     tentacleCount = 32,
@@ -358,6 +374,10 @@ local world = {
     tentacleSegmentLength = 8,
     particlesPerSecond = 5,
     simulationSpeed = 1.0,
+    proximitySpawnDistance = 20,
+    proximitySpawnCooldown = 1.0,
+    parentCooldown = 10.0,
+    childCooldown = 20.0,
   },
   ui = {
     sliders = {},
@@ -406,7 +426,83 @@ function love.update(dt)
       if p.x > world.width - 24 then p.vx = p.vx - 20 * dt end
       if p.y < 24 then p.vy = p.vy + 20 * dt end
       if p.y > world.height - 24 then p.vy = p.vy - 20 * dt end
+
+      -- Update spawn cooldown
+      if p.spawnCooldown > 0 then
+        p.spawnCooldown = p.spawnCooldown - dt
+
+        -- Fade color from green to yellow as child matures
+        if p.isChild then
+          local totalCooldown = world.settings.childCooldown
+          local progress = 1 - (p.spawnCooldown / totalCooldown)
+          progress = clamp(progress, 0, 1)
+
+          -- Interpolate between green (0.3, 0.9, 0.3) and yellow (0.98, 0.83, 0.35)
+          local greenColor = { 0.3, 0.9, 0.3 }
+          local yellowColor = { 0.98, 0.83, 0.35 }
+          p.color = {
+            greenColor[1] + (yellowColor[1] - greenColor[1]) * progress,
+            greenColor[2] + (yellowColor[2] - greenColor[2]) * progress,
+            greenColor[3] + (yellowColor[3] - greenColor[3]) * progress
+          }
+
+          if p.spawnCooldown <= 0 then
+            p.isChild = false
+          end
+        end
+      end
     end
+  end
+
+  -- Proximity-based spawning: check if particles are close to each other
+  local spawnDist = world.settings.proximitySpawnDistance
+  local parentCooldown = world.settings.parentCooldown
+  local childCooldown = world.settings.childCooldown
+  local newParticles = {}
+
+  for i = 1, #world.particles do
+    local p1 = world.particles[i]
+    if not p1._removed and p1.spawnCooldown <= 0 then
+      local nearbyCount = 0
+      local nearbyParticles = {}
+      local avgX, avgY = p1.x, p1.y
+
+      -- Count nearby particles
+      for j = i + 1, #world.particles do
+        local p2 = world.particles[j]
+        if not p2._removed and p2.spawnCooldown <= 0 then
+          local dist = distance(p1.x, p1.y, p2.x, p2.y)
+          if dist <= spawnDist then
+            nearbyCount = nearbyCount + 1
+            avgX = avgX + p2.x
+            avgY = avgY + p2.y
+            table.insert(nearbyParticles, p2)
+          end
+        end
+      end
+
+      -- If 2 or more particles close, spawn a new one
+      if nearbyCount >= 1 then -- nearbyCount >= 1 means p1 + at least 1 other = 2 total
+        avgX = avgX / (nearbyCount + 1)
+        avgY = avgY / (nearbyCount + 1)
+
+        -- Spawn near the center of the cluster with slight randomness
+        local offsetX, offsetY = randomInCircle(10)
+        local newP = newParticle(avgX + offsetX, avgY + offsetY, true, childCooldown) -- true = isChild
+        table.insert(newParticles, newP)
+
+        -- Set 10-second cooldown for parent particles that triggered the spawn
+        p1.spawnCooldown = parentCooldown
+        for _, p in ipairs(nearbyParticles) do
+          p.spawnCooldown = parentCooldown
+        end
+      end
+    end
+  end
+
+  -- Add newly spawned particles
+  for _, p in ipairs(newParticles) do
+    table.insert(world.particles, p)
   end
 
   -- Respawn new particles over time using particlesPerSecond
@@ -460,8 +556,10 @@ end
 
 function love.draw()
   -- Draw particles first (behind tentacles)
+  local particleCount = 0
   for _, p in ipairs(world.particles) do
     if not p._removed then
+      particleCount = particleCount + 1
       love.graphics.setColor(p.color)
       love.graphics.circle('fill', p.x, p.y, p.r)
     end
@@ -473,7 +571,7 @@ function love.draw()
   end
 
   -- Monster body last
-  world.monster:draw()
+  world.monster:draw(particleCount)
 
   -- Hint
   love.graphics.setColor(1, 1, 1, 0.7)
@@ -507,13 +605,15 @@ function initUI()
     makeSlider(x, y + 2 * (20 + pad), w, "tentacleSegmentLength", 4, 24, world.settings.tentacleSegmentLength, true),
     makeSlider(x, y + 3 * (20 + pad), w, "particlesPerSecond", 0, 30, world.settings.particlesPerSecond, false),
     makeSlider(x, y + 4 * (20 + pad), w, "simulationSpeed", 0.05, 5.0, world.settings.simulationSpeed or 1.0, false),
+    makeSlider(x, y + 5 * (20 + pad), w, "proximitySpawnDistance", 10, 100, world.settings.proximitySpawnDistance, true),
+    makeSlider(x, y + 6 * (20 + pad), w, "proximitySpawnCooldown", 0.1, 2.0, world.settings.proximitySpawnCooldown, false),
   }
 end
 
 function drawUI()
   if #world.ui.sliders == 0 then initUI() end
   love.graphics.setColor(0, 0, 0, 0.35)
-  love.graphics.rectangle('fill', 8, 8, 300, 4 * 30 + 20, 6, 6)
+  love.graphics.rectangle('fill', 8, 8, 300, 6 * 30 + 40, 6, 6)
   for _, s in ipairs(world.ui.sliders) do
     -- bar
     love.graphics.setColor(1, 1, 1, 0.8)
